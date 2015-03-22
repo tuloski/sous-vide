@@ -6,17 +6,18 @@
 #include <DallasTemperature.h>
 
 #define ONE_WIRE_BUS 2               // temp sensor data on pin 2
-#define TEMPERATURE_PRECISION 11     //11 bit precision
+#define TEMPERATURE_PRECISION 12     //11 bit precision
 #define LOOP_TIME 50                //buttons handler loop time
 #define DT LOOP_TIME/1000
 #define DT_CONTROL 500/1000     //control loop at 2 Hz-->500ms
 
 #define STATE_INIT 0         //state machine states
 #define STATE_PRE 10
+#define STATE_PRE2 11
 #define STATE_ON 20
 
-#define KP 4               //controller
-#define KI 0.1
+#define KP 14               //controller
+#define KI 0.038
 #define MAX_I 80
 #define MIN_I 0
 #define MAX_PI 100    //maximum 100% of duty cycle --> power 
@@ -70,13 +71,13 @@ void setup()
   sensors.requestTemperatures();
   
   cli();
-  //set timer1 interrupt at 2Hz
+  //set timer1 interrupt at 1.333Hz (waiting the probe 750ms)
   TCCR1A = 0;// set entire TCCR1A register to 0
   TCCR1B = 0;// same for TCCR1B
   TCNT1  = 0;//initialize counter value to 0
   // set compare match register for 1hz increments
   // 16x10e6/(freq*prescaler)-1
-  OCR1A = 31249;// = (16*10^6) / (2*256) - 1 (must be <65536)
+  OCR1A = 46875;// = (16*10^6) / (1.333*256) - 1 (must be <65536)
   // turn on CTC mode
   TCCR1B |= (1 << WGM12);
   // Set CS12 bits for 256 prescaler
@@ -111,16 +112,46 @@ void loop()
       lcd.print("Actual temp: ");
       lcd.setCursor(0,1);
       lcd.print("Commanded temp: ");
-      lcd.setCursor(2,3);
-      lcd.print("  -         +  ");
+      lcd.setCursor(0,3);
+      lcd.print(" Press both to heat!");
       lcd.setCursor(15,0);
       lcd.print(actual_temp);
       lcd.setCursor(15,1);
       lcd.print(comm_temp);
-      delay(2000);
-      STATE = STATE_ON;
+      delay(100);
+      STATE = STATE_PRE2;
       start_time = millis();
       break;
+    case STATE_PRE2:
+      if (millis()-start_time>LOOP_TIME){
+        start_time = millis();
+        if (digitalRead(Touch_1) && !digitalRead(Touch_2)){
+            counter_button++;
+        } else if (!digitalRead(Touch_1) && digitalRead(Touch_2)){
+            counter_button--;
+        } else {
+            counter_button = 0;
+            if (digitalRead(Touch_1) && digitalRead(Touch_2)){
+              STATE = STATE_ON;
+              lcd.setCursor(0,3);
+              lcd.print("                    ");
+              lcd.setCursor(0,3);
+              lcd.print("Power used: ");
+              lcd.print(pi);
+              lcd.print("%"); 
+              delay(1000);  
+            }
+        } 
+        comm_temp_preround += par_sat(counter_button,3)*DT;
+        comm_temp = round(comm_temp_preround*4)/4.f;     //round to 0.25 steps
+        
+        lcd.setCursor(15,0);
+        lcd.print(actual_temp,2);
+        //Serial.println((long)counter_button);
+        lcd.setCursor(15,1);
+        lcd.print(comm_temp,2);
+      }
+      break; 
     case STATE_ON:
       if (millis()-start_time>LOOP_TIME){
         start_time = millis();
@@ -158,14 +189,17 @@ void loop()
         //Serial.println((long)counter_button);
         lcd.setCursor(15,1);
         lcd.print(comm_temp,2);
+        lcd.setCursor(12,3);
+        lcd.print(pi);
+        lcd.print("% ");
       }
       break;
     }  
-  delay(20); 
+  delay(2); 
 }
 
 float par_sat(float x, float lambda){
-  float sat_comp = sign(x)*0.00005*x*x+sign(x);
+  float sat_comp = sign(x)*0.000035*x*x+sign(x);
   if (sat_comp>lambda){
     sat_comp = lambda;
   }  
@@ -213,7 +247,7 @@ void print_time (unsigned long milliseconds){
   }  
 } 
 
-ISR(TIMER1_COMPA_vect){//timer1 interrupt 2Hz
+ISR(TIMER1_COMPA_vect){//timer1 interrupt 1.333Hz
 
   /*------ get temperature ------*/
   actual_temp = sensors.getTempCByIndex(0);
@@ -249,7 +283,7 @@ ISR(TIMER1_COMPA_vect){//timer1 interrupt 2Hz
     pwm = round (mapfloat(pi,0,100,0,255));
     analogWrite(Relay,pwm);
     //Serial.print("PWM: ");
-    //Serial.println(pwm);
+    Serial.println(actual_temp);
     //Serial.print("proportional: ");
     //Serial.println(proportional);
     //Serial.print("integral: ");
